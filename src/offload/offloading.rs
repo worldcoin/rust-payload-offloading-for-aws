@@ -24,15 +24,10 @@ pub(crate) fn try_offload_body_blocking<Idp: IdProvider>(
             .generate()
             .map_err(OffloadInterceptorError::FailedToGenerateS3Key)?;
 
-        // Use tokio's Handle::current() to block_on within existing runtime
-        let put_obj_output = tokio::runtime::Handle::try_current()
-            .map_err(|e| {
-                OffloadInterceptorError::FailedToPutS3Object(format!(
-                    "No tokio runtime available: {}",
-                    e
-                ))
-            })?
-            .block_on(async {
+        // Use tokio::task::block_in_place to allow blocking within an async context
+        // This moves the current task to a dedicated blocking thread
+        let put_obj_output = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
                 let bucket_body =
                     aws_sdk_s3::primitives::ByteStream::from(original_body.as_bytes().to_vec());
 
@@ -44,7 +39,8 @@ pub(crate) fn try_offload_body_blocking<Idp: IdProvider>(
                     .send()
                     .await
                     .map_err(|e| OffloadInterceptorError::FailedToPutS3Object(e.to_string()))
-            })?;
+            })
+        })?;
 
         tracing::info!("Got s3 put result: {:?}", put_obj_output);
 
@@ -106,15 +102,10 @@ pub fn download_from_s3(
     s3_client: &aws_sdk_s3::Client,
     s3_pointer: &PayloadS3Pointer,
 ) -> Result<String, OffloadInterceptorError> {
-    // Use tokio's Handle::current() to block_on within existing runtime
-    let downloaded = tokio::runtime::Handle::try_current()
-        .map_err(|e| {
-            OffloadInterceptorError::FailedToLoadFromS3(format!(
-                "No tokio runtime available: {}",
-                e
-            ))
-        })?
-        .block_on(
+    // Use tokio::task::block_in_place to allow blocking within an async context
+    // This moves the current task to a dedicated blocking thread
+    let downloaded = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
             async {
                 s3_client
                     .get_object()
@@ -129,7 +120,8 @@ pub fn download_from_s3(
                     .collect()
                     .map_err(|e| OffloadInterceptorError::ByteStreamError(e.to_string()))
             }),
-        )?;
+        )
+    })?;
 
     let data_string = String::from_utf8(downloaded.into_bytes().to_vec())
         .map_err(|e| OffloadInterceptorError::ByteStreamError(e.to_string()))?;
