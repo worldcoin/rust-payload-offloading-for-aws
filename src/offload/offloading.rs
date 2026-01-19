@@ -2,7 +2,7 @@ use super::{error::OffloadInterceptorError, id_provider::IdProvider};
 use aws_config::SdkConfig;
 use aws_sdk_s3::Client as S3Client;
 use core::str;
-use futures::{executor, TryFutureExt};
+use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,18 +23,23 @@ pub(crate) fn try_offload_body_blocking<Idp: IdProvider>(
         let bucket_key = id_provider
             .generate()
             .map_err(OffloadInterceptorError::FailedToGenerateS3Key)?;
-        let put_obj_output = executor::block_on(async {
-            let bucket_body =
-                aws_sdk_s3::primitives::ByteStream::from(original_body.as_bytes().to_vec());
 
-            s3_client
-                .put_object()
-                .bucket(bucket_name)
-                .key(&bucket_key)
-                .body(bucket_body)
-                .send()
-                .await
-                .map_err(|e| OffloadInterceptorError::FailedToPutS3Object(e.to_string()))
+        // Use tokio::task::block_in_place to allow blocking within an async context
+        // This moves the current task to a dedicated blocking thread
+        let put_obj_output = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let bucket_body =
+                    aws_sdk_s3::primitives::ByteStream::from(original_body.as_bytes().to_vec());
+
+                s3_client
+                    .put_object()
+                    .bucket(bucket_name)
+                    .key(&bucket_key)
+                    .body(bucket_body)
+                    .send()
+                    .await
+                    .map_err(|e| OffloadInterceptorError::FailedToPutS3Object(e.to_string()))
+            })
         })?;
 
         tracing::info!("Got s3 put result: {:?}", put_obj_output);
@@ -97,22 +102,26 @@ pub fn download_from_s3(
     s3_client: &aws_sdk_s3::Client,
     s3_pointer: &PayloadS3Pointer,
 ) -> Result<String, OffloadInterceptorError> {
-    let downloaded = executor::block_on(
-        async {
-            s3_client
-                .get_object()
-                .bucket(&s3_pointer.s3_bucket_name)
-                .key(&s3_pointer.s3_key)
-                .send()
-                .await
-                .map_err(|e| OffloadInterceptorError::FailedToLoadFromS3(e.to_string()))
-        }
-        .and_then(|r| {
-            r.body
-                .collect()
-                .map_err(|e| OffloadInterceptorError::ByteStreamError(e.to_string()))
-        }),
-    )?;
+    // Use tokio::task::block_in_place to allow blocking within an async context
+    // This moves the current task to a dedicated blocking thread
+    let downloaded = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            async {
+                s3_client
+                    .get_object()
+                    .bucket(&s3_pointer.s3_bucket_name)
+                    .key(&s3_pointer.s3_key)
+                    .send()
+                    .await
+                    .map_err(|e| OffloadInterceptorError::FailedToLoadFromS3(e.to_string()))
+            }
+            .and_then(|r| {
+                r.body
+                    .collect()
+                    .map_err(|e| OffloadInterceptorError::ByteStreamError(e.to_string()))
+            }),
+        )
+    })?;
 
     let data_string = String::from_utf8(downloaded.into_bytes().to_vec())
         .map_err(|e| OffloadInterceptorError::ByteStreamError(e.to_string()))?;
