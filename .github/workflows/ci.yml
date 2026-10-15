@@ -19,6 +19,8 @@ jobs:
   msrv:
     name: Build with MSRV
     runs-on: ubuntu-latest
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
     steps:
       - name: Checkout sources
         uses: actions/checkout@v5
@@ -36,8 +38,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-hack
+      - name: Resolve MSRV-compatible dependencies
+        run: |
+          cargo generate-lockfile
+          # aws-config 1.8.11 omits MSRV metadata and requires newer SDKs.
+          cargo update -p aws-config --precise 1.8.8
+          # Re-resolve SDKs retained from the initial config selection.
+          cargo update -p aws-sdk-sso -p aws-sdk-ssooidc -p aws-sdk-sts
       - name: Build
-        run: cargo hack build --each-feature --keep-going
+        run: cargo hack build --each-feature --keep-going --locked
 
   test:
     name: Test
