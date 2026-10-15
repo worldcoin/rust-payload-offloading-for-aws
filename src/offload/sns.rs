@@ -235,6 +235,7 @@ mod tests {
 
     use crate::offload::{
         id_provider::FixedIdsProvider,
+        offloading::s3_client,
         sns::S3OffloadInterceptor,
         test::{
             self, expect_no_s3_put_calls, given_s3_put_fails, given_s3_put_succeeds,
@@ -322,7 +323,7 @@ mod tests {
         info!("Base endpoint url: {}", base_endpoint_url);
         let s3_test_client = s3_client(&s3_config(base_endpoint_url).await);
         let s3_offload_interceptor = S3OffloadInterceptor::new(
-            &s3_test_client,
+            s3_test_client,
             FixedIdsProvider::new(vec![TEST_RANDOM_ID]),
             TEST_BUCKET.to_owned(),
             max_non_offload_size,
