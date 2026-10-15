@@ -44,7 +44,7 @@ async fn send_sns_and_receive_sqs() {
         .await;
 
     let sns_s3_offload_interceptor = offload::sns::S3OffloadInterceptor::new(
-        &aws_config,
+        offload::offloading::s3_client(&aws_config),
         offload::id_provider::RandomUuidProvider::default(), // bucket key generator
         "my-bucket".to_owned(), // offloading bucket
         255000, // max non-offload body size
